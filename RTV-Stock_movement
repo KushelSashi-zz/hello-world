@@ -1,0 +1,41 @@
+SELECT
+asn.id_Partner_Source as Id_Partner,
+opi.SKU,
+rp.name As Partner_Name,
+rc.name_en As Partner_City,
+rc.Country_Code As Partner_Country,
+opi.id_purchase_item,
+Split(opi.purchase_item_nr,"-P")[Offset(0)] as item_nr,
+asn.ASN_Nr,
+osp.Picklist_Nr,
+ppw.code As Warehouse_Code,
+ppwt.partner_code as Outbound_Warehouse,
+Expected_Items As Asn_Expected_Qty,
+asnp.picked_qty As Asn_Picked_Qty,
+Asn_Received_Qty,
+(Expected_Items-Asn_Received_Qty) As Short_Qty,
+Unidentified_Qty,
+QC_Rejected_Qty,
+asqc.reject_reason_code As QC_Reject_Reason,
+Substr(Cast(Timestamp_ADD(osp.ready_for_pickup_at,Interval 240 minute) As String),0,19) As Ready_At,
+Substr(Cast(Timestamp_ADD(max_pickedup_at,Interval 240 minute) As String),0,19) As Picked_At,
+Substr(Cast(Timestamp_ADD(max_handover_at,Interval 240 minute) As String),0,19) As Handover_At,
+Substr(Cast(Timestamp_ADD(asn.wms_at,Interval 240 minute) As String),0,19) As WMS_At,
+Substr(Cast(Timestamp_ADD(asn.posted_at,Interval 240 minute) As String),0,19) As Posted_At
+FROM `noondwh.oms.stock_item` osi
+Left Join `noondwh.oms.purchase_item` opi ON (opi.id_purchase_item=osi.id_purchase_item)
+Left Join `noondwh.oms.stock_picklist_item` ospi ON (osi.id_purchase_item=ospi.id_purchase_item)
+Left Join `noondwh.oms.stock_picklist` osp ON (osp.id_stock_picklist=ospi.id_stock_picklist)
+Left Join `noondwh.ops_inbound.asn` asn ON (cast(osp.id_pickup as string)=asn.source_nr)
+Left Join `noondwh.partner.partner_warehouse_address` pwa ON (pwa.id_partner_warehouse=asn.id_partner_warehouse_from)
+Left Join `noondwh.ref.city` rc ON (rc.id_city=pwa.id_city)
+Left Join `noondwh.ref.partner` rp on (rp.id_partner=asn.id_Partner_Source)
+Left Join `noondwh.partner.partner_warehouse` ppw ON (ppw.id_partner_warehouse=asn.id_partner_warehouse_from)
+Left Join `noondwh.partner.partner_warehouse` ppwt ON (ppwt.id_partner_warehouse=asn.id_partner_warehouse_to)
+Left Join (select count(id_purchase_item) as Expected_Items, id_pickup from `noondwh.oms.stock_picklist_item` Left JOin `noondwh.oms.stock_picklist` Using (id_stock_picklist) group by 2) ospc ON (cast(ospc.id_pickup as string)=asn.source_nr)
+Left Join (select id_asn, max(pickedup_at) as max_pickedup_at,sum(pickedup_qty) as picked_qty From `noondwh.ops_inbound.asn_shipment` group by 1)  asnp ON (asnp.id_asn=asn.id_asn)
+Left Join (select id_asn,max(delivered_at) as max_handover_at From `noondwh.ops_inbound.asn_shipment_pkg` group by 1) asnd ON (asnd.id_asn=asnp.id_asn)
+Left Join (select id_asn, sum(qty_received) As Asn_Received_Qty,
+SUM(IF(wms_barcode_inner="UNIDENTIFIED",qty_received,0)) As Unidentified_Qty,
+(SUM(IF(reject_reason_code    is not Null,qty_received,0))-SUM(IF(wms_barcode_inner="UNIDENTIFIED",qty_received,0))) As QC_Rejected_Qty from `noondwh.asn.asn_received` group by 1) asnr ON (asn.id_asn=asnr.id_asn)
+Left Join `noondwh.asn.asn_received` asqc ON (asqc.id_asn=asn.id_asn and opi.sku=asqc.noon_sku)

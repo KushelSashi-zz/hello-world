@@ -7,6 +7,7 @@ rc.Country_Code As Partner_Country,
 opi.id_purchase_item,
 Split(opi.purchase_item_nr,"-P")[Offset(0)] as item_nr,
 asn.ASN_Nr,
+If(osp.id_pickup=ospp.id_pickup,1,0) as Is_Last_ASN,
 osp.Picklist_Nr,
 ppw.code As Warehouse_Code,
 ppwt.partner_code as Outbound_Warehouse,
@@ -39,3 +40,6 @@ Left Join (select id_asn, sum(qty_received) As Asn_Received_Qty,
 SUM(IF(wms_barcode_inner="UNIDENTIFIED",qty_received,0)) As Unidentified_Qty,
 (SUM(IF(reject_reason_code    is not Null,qty_received,0))-SUM(IF(wms_barcode_inner="UNIDENTIFIED",qty_received,0))) As QC_Rejected_Qty from `noondwh.asn.asn_received` group by 1) asnr ON (asn.id_asn=asnr.id_asn)
 Left Join `noondwh.asn.asn_received` asqc ON (asqc.id_asn=asn.id_asn and opi.sku=asqc.noon_sku)
+Left Join (select id_purchase_item,max(created_at) as max_created_at, min(created_at) as min_created_at from `noondwh.oms.stock_picklist_item`  group by 1) ospiii ON ospiii.id_purchase_item=opi.id_purchase_item
+Left Join `noondwh.oms.stock_picklist_item`  ospii on ospii.id_purchase_item=opi.id_purchase_item and ospii.created_at=ospiii.max_created_at
+Left Join `noondwh.oms.stock_picklist` ospp On ospp.id_stock_picklist=ospii.id_stock_picklist

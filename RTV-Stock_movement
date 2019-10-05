@@ -1,14 +1,21 @@
 SELECT
+soi.id_sales_order_item as SO_Item,
 asn.id_Partner_Source as Id_Partner,
 opi.SKU,
 rp.name As Partner_Name,
 rc.name_en As Partner_City,
 rc.Country_Code As Partner_Country,
+IF(poif.id_purchase_order_item=poi.id_purchase_order_item,1,0) Is_First,
+IF(poil.id_purchase_order_item=poi.id_purchase_order_item,1,0) Is_Last,
+poi.id_purchase_order_item As PO_Item,
+poi.is_fbn,
 opi.id_purchase_item,
 Split(opi.purchase_item_nr,"-P")[Offset(0)] as item_nr,
 asn.ASN_Nr,
 If(osp.id_pickup=ospp.id_pickup,1,0) as Is_Last_ASN,
+IF(movement_count>=2,1,0) As Is_Superseller,
 osp.Picklist_Nr,
+rsois.code As Agentone_Status,
 ppw.code As Warehouse_Code,
 ppwt.partner_code as Outbound_Warehouse,
 Expected_Items As Asn_Expected_Qty,
@@ -22,10 +29,16 @@ Substr(Cast(Timestamp_ADD(osp.ready_for_pickup_at,Interval 240 minute) As String
 Substr(Cast(Timestamp_ADD(max_pickedup_at,Interval 240 minute) As String),0,19) As Picked_At,
 Substr(Cast(Timestamp_ADD(max_handover_at,Interval 240 minute) As String),0,19) As Handover_At,
 Substr(Cast(Timestamp_ADD(asn.wms_at,Interval 240 minute) As String),0,19) As WMS_At,
-Substr(Cast(Timestamp_ADD(asn.posted_at,Interval 240 minute) As String),0,19) As Posted_At
+Substr(Cast(Timestamp_ADD(asn.posted_at,Interval 240 minute) As String),0,19) As Posted_At,
+Substr(Cast(Timestamp_ADD(soiss.created_at,Interval 240 minute) As String),0,19) As Shipped_At,
+Substr(Cast(Timestamp_ADD(sois.created_at,Interval 240 minute) As String),0,19) As Delivered_At,
+Substr(Cast(Timestamp_ADD(soi.estimated_delivery_at,Interval 0 minute) As String),0,19) As Estimated_Delivery
+
 FROM `noondwh.oms.stock_item` osi
 Left Join `noondwh.oms.purchase_item` opi ON (opi.id_purchase_item=osi.id_purchase_item)
-Left Join `noondwh.oms.stock_picklist_item` ospi ON (osi.id_purchase_item=ospi.id_purchase_item)
+Left Join `noondwh.purchase_v2.purchase_order_item` poi ON poi.purchase_item_nr=opi.purchase_item_nr
+Left Join `noondwh.sales.sales_order_item` soi ON poi.id_sales_order_item=soi.id_sales_order_item
+Left Join (Select * from `noondwh.oms.stock_picklist_item` where is_removed=0) ospi ON (osi.id_purchase_item=ospi.id_purchase_item)
 Left Join `noondwh.oms.stock_picklist` osp ON (osp.id_stock_picklist=ospi.id_stock_picklist)
 Left Join `noondwh.ops_inbound.asn` asn ON (cast(osp.id_pickup as string)=asn.source_nr)
 Left Join `noondwh.partner.partner_warehouse_address` pwa ON (pwa.id_partner_warehouse=asn.id_partner_warehouse_from)
@@ -33,13 +46,25 @@ Left Join `noondwh.ref.city` rc ON (rc.id_city=pwa.id_city)
 Left Join `noondwh.ref.partner` rp on (rp.id_partner=asn.id_Partner_Source)
 Left Join `noondwh.partner.partner_warehouse` ppw ON (ppw.id_partner_warehouse=asn.id_partner_warehouse_from)
 Left Join `noondwh.partner.partner_warehouse` ppwt ON (ppwt.id_partner_warehouse=asn.id_partner_warehouse_to)
-Left Join (select count(id_purchase_item) as Expected_Items, id_pickup from `noondwh.oms.stock_picklist_item` Left JOin `noondwh.oms.stock_picklist` Using (id_stock_picklist) group by 2) ospc ON (cast(ospc.id_pickup as string)=asn.source_nr)
+Left Join (select count(id_purchase_item) as Expected_Items, id_pickup from `noondwh.oms.stock_picklist_item` Left JOin `noondwh.oms.stock_picklist` Using (id_stock_picklist) where is_removed=0 group by 2) ospc ON (cast(ospc.id_pickup as string)=asn.source_nr)
 Left Join (select id_asn, max(pickedup_at) as max_pickedup_at,sum(pickedup_qty) as picked_qty From `noondwh.ops_inbound.asn_shipment` group by 1)  asnp ON (asnp.id_asn=asn.id_asn)
 Left Join (select id_asn,max(delivered_at) as max_handover_at From `noondwh.ops_inbound.asn_shipment_pkg` group by 1) asnd ON (asnd.id_asn=asnp.id_asn)
 Left Join (select id_asn, sum(qty_received) As Asn_Received_Qty,
 SUM(IF(wms_barcode_inner="UNIDENTIFIED",qty_received,0)) As Unidentified_Qty,
 (SUM(IF(reject_reason_code    is not Null,qty_received,0))-SUM(IF(wms_barcode_inner="UNIDENTIFIED",qty_received,0))) As QC_Rejected_Qty from `noondwh.asn.asn_received` group by 1) asnr ON (asn.id_asn=asnr.id_asn)
-Left Join `noondwh.asn.asn_received` asqc ON (asqc.id_asn=asn.id_asn and opi.sku=asqc.noon_sku)
+Left Join `noondwh.asn.asn_received` asqc ON (asqc.id_asn=asnr.id_asn and opi.sku=asqc.noon_sku)
 Left Join (select id_purchase_item,max(created_at) as max_created_at, min(created_at) as min_created_at from `noondwh.oms.stock_picklist_item`  group by 1) ospiii ON ospiii.id_purchase_item=opi.id_purchase_item
 Left Join `noondwh.oms.stock_picklist_item`  ospii on ospii.id_purchase_item=opi.id_purchase_item and ospii.created_at=ospiii.max_created_at
 Left Join `noondwh.oms.stock_picklist` ospp On ospp.id_stock_picklist=ospii.id_stock_picklist
+Left Join (select soi.id_sales_order_item,IF(soi.id_sales_order_item_status<=soish.id_sales_order_item_status,soish.id_sales_order_item_status,soi.id_sales_order_item_status) As id_sales_order_item_status  From `noondwh.sales.sales_order_item` soi
+Left Join (select id_sales_order_item, max(id_sales_order_item_status) As id_sales_order_item_status From `noondwh.sales.sales_order_item_status_history` group by 1 )soish On (soish.id_sales_order_item=soi.id_sales_order_item) ) soish On soish.id_sales_order_item=soi.id_sales_order_item
+Left Join (select id_sales_order_item, count(id_sales_order_item) as movement_count, max(created_at) as max_created_at, min(created_at) as min_created_at  from `noondwh.purchase_v2.purchase_order_item` group by 1) poii ON (poii.id_sales_order_item=soi.id_sales_order_item)
+Left Join `noondwh.purchase_v2.purchase_order_item` poif ON poif.id_sales_order_item=soi.id_sales_order_item AND poif.created_at=poii.min_created_at
+Left Join `noondwh.purchase_v2.purchase_order_item` poil ON poil.id_sales_order_item=soi.id_sales_order_item AND poil.created_at=poii.max_created_at 
+Left Join (select * From `noondwh.sales.sales_order_item_status_history` where id_sales_order_item_status=5) soiss ON (soi.id_sales_order_item=soiss.id_sales_order_item)
+Left Join (select * From `noondwh.sales.sales_order_item_status_history` where id_sales_order_item_status=6) sois ON (soi.id_sales_order_item=sois.id_sales_order_item)
+Left Join `noondwh.ref.sales_order_item_status` rsois ON (soish.id_sales_order_item_status=rsois.id_sales_order_item_status)
+where asn.source_type="PICKUP"
+AND Date(Timestamp(Substr(Cast(Timestamp_ADD(soiss.created_at,Interval 240 minute) As String),0,19)))>="2019-10-03"
+AND Date(Timestamp(Substr(Cast(Timestamp_ADD(soiss.created_at,Interval 240 minute) As String),0,19)))<="2019-10-04"
+AND rc.country_code="AE"
